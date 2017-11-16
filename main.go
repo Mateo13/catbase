@@ -14,11 +14,19 @@ import (
 	"github.com/velour/catbase/plugins/beers"
 	"github.com/velour/catbase/plugins/counter"
 	"github.com/velour/catbase/plugins/dice"
-	"github.com/velour/catbase/plugins/downtime"
+	"github.com/velour/catbase/plugins/emojifyme"
 	"github.com/velour/catbase/plugins/fact"
+	"github.com/velour/catbase/plugins/first"
+	"github.com/velour/catbase/plugins/inventory"
 	"github.com/velour/catbase/plugins/leftpad"
+	"github.com/velour/catbase/plugins/reaction"
 	"github.com/velour/catbase/plugins/reminder"
+	"github.com/velour/catbase/plugins/rpgORdie"
+	"github.com/velour/catbase/plugins/rss"
+	"github.com/velour/catbase/plugins/sisyphus"
+	"github.com/velour/catbase/plugins/stats"
 	"github.com/velour/catbase/plugins/talker"
+	"github.com/velour/catbase/plugins/tell"
 	"github.com/velour/catbase/plugins/twitch"
 	"github.com/velour/catbase/plugins/your"
 	"github.com/velour/catbase/plugins/zork"
@@ -26,8 +34,8 @@ import (
 )
 
 func main() {
-	var cfile = flag.String("config", "config.json",
-		"Config file to load. (Defaults to config.json)")
+	var cfile = flag.String("config", "config.lua",
+		"Config file to load. (Defaults to config.lua)")
 	flag.Parse() // parses the logging flags.
 
 	c := config.Readconfig(Version, *cfile)
@@ -46,9 +54,10 @@ func main() {
 
 	// b.AddHandler(plugins.NewTestPlugin(b))
 	b.AddHandler("admin", admin.New(b))
-	// b.AddHandler("first", plugins.NewFirstPlugin(b))
+	b.AddHandler("stats", stats.New(b))
+	b.AddHandler("first", first.New(b))
 	b.AddHandler("leftpad", leftpad.New(b))
-	b.AddHandler("downtime", downtime.New(b))
+	// b.AddHandler("downtime", downtime.New(b))
 	b.AddHandler("talker", talker.New(b))
 	b.AddHandler("dice", dice.New(b))
 	b.AddHandler("beers", beers.New(b))
@@ -57,10 +66,20 @@ func main() {
 	b.AddHandler("counter", counter.New(b))
 	b.AddHandler("reminder", reminder.New(b))
 	b.AddHandler("babbler", babbler.New(b))
-	b.AddHandler("twitch", twitch.New(b))
 	b.AddHandler("zork", zork.New(b))
+	b.AddHandler("rss", rss.New(b))
+	b.AddHandler("reaction", reaction.New(b))
+	b.AddHandler("emojifyme", emojifyme.New(b))
+	b.AddHandler("twitch", twitch.New(b))
+	b.AddHandler("inventory", inventory.New(b))
+	b.AddHandler("rpgORdie", rpgORdie.New(b))
+	b.AddHandler("sisyphus", sisyphus.New(b))
+	b.AddHandler("tell", tell.New(b))
 	// catches anything left, will always return true
 	b.AddHandler("factoid", fact.New(b))
 
-	client.Serve()
+	for {
+		err := client.Serve()
+		log.Println(err)
+	}
 }

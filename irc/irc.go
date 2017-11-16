@@ -3,6 +3,7 @@
 package irc
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -43,6 +44,7 @@ type Irc struct {
 
 	eventReceived   func(msg.Message)
 	messageReceived func(msg.Message)
+	replyMessageReceived  func(msg.Message, string)
 }
 
 func New(c *config.Config) *Irc {
@@ -60,12 +62,16 @@ func (i *Irc) RegisterMessageReceived(f func(msg.Message)) {
 	i.messageReceived = f
 }
 
+func (i *Irc) RegisterReplyMessageReceived(f func(msg.Message, string)) {
+	i.replyMessageReceived = f
+}
+
 func (i *Irc) JoinChannel(channel string) {
 	log.Printf("Joining channel: %s", channel)
 	i.Client.Out <- irc.Msg{Cmd: irc.JOIN, Args: []string{channel}}
 }
 
-func (i *Irc) SendMessage(channel, message string) {
+func (i *Irc) SendMessage(channel, message string) string {
 	for len(message) > 0 {
 		m := irc.Msg{
 			Cmd:  "PRIVMSG",
@@ -89,18 +95,43 @@ func (i *Irc) SendMessage(channel, message string) {
 
 		i.Client.Out <- m
 	}
+	return "NO_IRC_IDENTIFIERS"
 }
 
 // Sends action to channel
-func (i *Irc) SendAction(channel, message string) {
+func (i *Irc) SendAction(channel, message string) string {
 	message = actionPrefix + " " + message + "\x01"
 
 	i.SendMessage(channel, message)
+	return "NO_IRC_IDENTIFIERS"
 }
 
-func (i *Irc) Serve() {
+func (i *Irc) ReplyToMessageIdentifier(channel, message, identifier string) (string, bool) {
+	return "NO_IRC_IDENTIFIERS", false
+}
+
+func (i *Irc) ReplyToMessage(channel, message string, replyTo msg.Message) (string, bool) {
+	return "NO_IRC_IDENTIFIERS", false
+}
+
+func (i *Irc) React(channel, reaction string, message msg.Message) bool {
+	//we're not goign to do anything because it's IRC
+	return false
+}
+
+func (i *Irc) Edit(channel, newMessage, identifier string) bool {
+	//we're not goign to do anything because it's IRC
+	return false
+}
+
+func (i *Irc) GetEmojiList() map[string]string {
+	//we're not goign to do anything because it's IRC
+	return make(map[string]string)
+}
+
+func (i *Irc) Serve() error {
 	if i.eventReceived == nil || i.messageReceived == nil {
-		log.Fatal("Missing an event handler")
+		return fmt.Errorf("Missing an event handler")
 	}
 
 	var err error
@@ -112,7 +143,7 @@ func (i *Irc) Serve() {
 		true,
 	)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("%s", err)
 	}
 
 	for _, c := range i.config.Channels {
@@ -122,6 +153,7 @@ func (i *Irc) Serve() {
 	i.quit = make(chan bool)
 	go i.handleConnection()
 	<-i.quit
+	return nil
 }
 
 func (i *Irc) handleConnection() {

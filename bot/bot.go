@@ -7,11 +7,9 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/mattn/go-sqlite3"
 	"github.com/velour/catbase/bot/msg"
 	"github.com/velour/catbase/bot/msglog"
 	"github.com/velour/catbase/bot/user"
@@ -48,31 +46,17 @@ type bot struct {
 
 	// The entries to the bot's HTTP interface
 	httpEndPoints map[string]string
+
+	// filters registered by plugins
+	filters map[string]func(string) string
 }
 
 type Variable struct {
 	Variable, Value string
 }
 
-func init() {
-	regex := func(re, s string) (bool, error) {
-		return regexp.MatchString(re, s)
-	}
-	sql.Register("sqlite3_custom",
-		&sqlite3.SQLiteDriver{
-			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-				return conn.RegisterFunc("REGEXP", regex, true)
-			},
-		})
-}
-
 // Newbot creates a bot for a given connection and set of handlers.
 func New(config *config.Config, connector Connector) Bot {
-	sqlDB, err := sqlx.Open("sqlite3_custom", config.DB.File)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	logIn := make(chan msg.Message)
 	logOut := make(chan msg.Messages)
 
@@ -91,11 +75,12 @@ func New(config *config.Config, connector Connector) Bot {
 		conn:           connector,
 		users:          users,
 		me:             users[0],
-		db:             sqlDB,
+		db:             config.DBConn,
 		logIn:          logIn,
 		logOut:         logOut,
 		version:        config.Version,
 		httpEndPoints:  make(map[string]string),
+		filters:        make(map[string]func(string) string),
 	}
 
 	bot.migrateDB()
@@ -108,6 +93,7 @@ func New(config *config.Config, connector Connector) Bot {
 
 	connector.RegisterMessageReceived(bot.MsgReceived)
 	connector.RegisterEventReceived(bot.EventReceived)
+	connector.RegisterReplyMessageReceived(bot.ReplyMsgReceived)
 
 	return bot
 }
@@ -160,7 +146,7 @@ func (b *bot) migrateDB() {
 
 // Adds a constructed handler to the bots handlers list
 func (b *bot) AddHandler(name string, h Handler) {
-	b.plugins[strings.ToLower(name)] = h
+	b.plugins[name] = h
 	b.pluginOrdering = append(b.pluginOrdering, name)
 	if entry := h.RegisterWeb(); entry != nil {
 		b.httpEndPoints[name] = *entry
@@ -218,16 +204,12 @@ func (b *bot) serveRoot(w http.ResponseWriter, r *http.Request) {
 
 // Checks if message is a command and returns its curtailed version
 func IsCmd(c *config.Config, message string) (bool, string) {
-	cmdc := c.CommandChar
+	cmdcs := c.CommandChar
 	botnick := strings.ToLower(c.Nick)
 	iscmd := false
 	lowerMessage := strings.ToLower(message)
 
-	if strings.HasPrefix(lowerMessage, cmdc) && len(cmdc) > 0 {
-		iscmd = true
-		message = message[len(cmdc):]
-		// } else if match, _ := regexp.MatchString(rex, lowerMessage); match {
-	} else if strings.HasPrefix(lowerMessage, botnick) &&
+	if strings.HasPrefix(lowerMessage, botnick) &&
 		len(lowerMessage) > len(botnick) &&
 		(lowerMessage[len(botnick)] == ',' || lowerMessage[len(botnick)] == ':') {
 
@@ -237,6 +219,14 @@ func IsCmd(c *config.Config, message string) (bool, string) {
 		// trim off the customary addressing punctuation
 		if message[0] == ':' || message[0] == ',' {
 			message = message[1:]
+		}
+	} else {
+		for _, cmdc := range cmdcs {
+			if strings.HasPrefix(lowerMessage, cmdc) && len(cmdc) > 0 {
+				iscmd = true
+				message = message[len(cmdc):]
+				break
+			}
 		}
 	}
 
@@ -281,4 +271,9 @@ func (b *bot) checkAdmin(nick string) bool {
 		}
 	}
 	return false
+}
+
+// Register a text filter which every outgoing message is passed through
+func (b *bot) RegisterFilter(name string, f func(string) string) {
+	b.filters[name] = f
 }

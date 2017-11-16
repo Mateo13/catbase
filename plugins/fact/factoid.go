@@ -33,6 +33,62 @@ type factoid struct {
 	Count    int
 }
 
+type alias struct {
+	Fact string
+	Next string
+}
+
+func (a *alias) resolve(db *sqlx.DB) (*factoid, error) {
+	// perform DB query to fill the To field
+	q := `select fact, next from factoid_alias where fact=?`
+	var next alias
+	err := db.Get(&next, q, a.Next)
+	if err != nil {
+		// we hit the end of the chain, get a factoid named Next
+		fact, err := getSingleFact(db, a.Next)
+		if err != nil {
+			err := fmt.Errorf("Error resolvig alias %v: %v", a, err)
+			return nil, err
+		}
+		return fact, nil
+	}
+	return next.resolve(db)
+}
+
+func findAlias(db *sqlx.DB, fact string) (bool, *factoid) {
+	q := `select * from factoid_alias where fact=?`
+	var a alias
+	err := db.Get(&a, q, fact)
+	if err != nil {
+		return false, nil
+	}
+	f, err := a.resolve(db)
+	return err == nil, f
+}
+
+func (a *alias) save(db *sqlx.DB) error {
+	q := `select * from factoid_alias where fact=?`
+	var offender alias
+	err := db.Get(&offender, q, a.Next)
+	if err == nil {
+		return fmt.Errorf("DANGER: an opposite alias already exists")
+	}
+	_, err = a.resolve(db)
+	if err != nil {
+		return fmt.Errorf("there is no fact at that destination")
+	}
+	q = `insert or replace into factoid_alias (fact, next) values (?, ?)`
+	_, err = db.Exec(q, a.Fact, a.Next)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func aliasFromStrings(from, to string) *alias {
+	return &alias{from, to}
+}
+
 func (f *factoid) save(db *sqlx.DB) error {
 	var err error
 	if f.id.Valid {
@@ -220,7 +276,7 @@ func New(botInst bot.Bot) *Factoid {
 		db: botInst.DB(),
 	}
 
-	_, err := p.db.Exec(`create table if not exists factoid (
+	if _, err := p.db.Exec(`create table if not exists factoid (
 			id integer primary key,
 			fact string,
 			tidbit string,
@@ -229,8 +285,15 @@ func New(botInst bot.Bot) *Factoid {
 			created integer,
 			accessed integer,
 			count integer
-		);`)
-	if err != nil {
+		);`); err != nil {
+		log.Fatal(err)
+	}
+
+	if _, err := p.db.Exec(`create table if not exists factoid_alias (
+			fact string,
+			next string,
+			primary key (fact, next)
+		);`); err != nil {
 		log.Fatal(err)
 	}
 
@@ -315,7 +378,7 @@ func (p *Factoid) findTrigger(fact string) (bool, *factoid) {
 
 	f, err := getSingleFact(p.db, fact)
 	if err != nil {
-		return false, nil
+		return findAlias(p.db, fact)
 	}
 	return true, f
 }
@@ -439,18 +502,15 @@ func (p *Factoid) forgetLastFact(message msg.Message) bool {
 		p.Bot.SendMessage(message.Channel, "I refuse.")
 		return true
 	}
-	if message.User.Admin || message.User.Name == p.LastFact.Owner {
-		err := p.LastFact.delete(p.db)
-		if err != nil {
-			log.Println("Error removing fact: ", p.LastFact, err)
-		}
-		fmt.Printf("Forgot #%d: %s %s %s\n", p.LastFact.id.Int64, p.LastFact.Fact,
-			p.LastFact.Verb, p.LastFact.Tidbit)
-		p.Bot.SendAction(message.Channel, "hits himself over the head with a skillet")
-		p.LastFact = nil
-	} else {
-		p.Bot.SendMessage(message.Channel, "You don't own that fact.")
+
+	err := p.LastFact.delete(p.db)
+	if err != nil {
+		log.Println("Error removing fact: ", p.LastFact, err)
 	}
+	fmt.Printf("Forgot #%d: %s %s %s\n", p.LastFact.id.Int64, p.LastFact.Fact,
+		p.LastFact.Verb, p.LastFact.Tidbit)
+	p.Bot.SendAction(message.Channel, "hits himself over the head with a skillet")
+	p.LastFact = nil
 
 	return true
 }
@@ -479,12 +539,8 @@ func (p *Factoid) changeFact(message msg.Message) bool {
 		if err != nil {
 			log.Println("Error getting facts: ", trigger, err)
 		}
-		if !(message.User.Admin && userexp[len(userexp)-1] == 'g') {
+		if userexp[len(userexp)-1] != 'g' {
 			result = result[:1]
-			if result[0].Owner != message.User.Name && !message.User.Admin {
-				p.Bot.SendMessage(message.Channel, "That's not your fact to edit.")
-				return true
-			}
 		}
 		// make the changes
 		msg := fmt.Sprintf("Changing %d facts.", len(result))
@@ -554,13 +610,29 @@ func (p *Factoid) Message(message msg.Message) bool {
 		return p.trigger(message)
 	}
 
+	if strings.HasPrefix(strings.ToLower(message.Body), "alias") {
+		log.Printf("Trying to learn an alias: %s", message.Body)
+		m := strings.TrimPrefix(message.Body, "alias ")
+		parts := strings.SplitN(m, "->", 2)
+		if len(parts) != 2 {
+			p.Bot.SendMessage(message.Channel, "If you want to alias something, use: `alias this -> that`")
+			return true
+		}
+		a := aliasFromStrings(strings.TrimSpace(parts[1]), strings.TrimSpace(parts[0]))
+		if err := a.save(p.db); err != nil {
+			p.Bot.SendMessage(message.Channel, err.Error())
+		} else {
+			p.Bot.SendAction(message.Channel, "learns a new synonym")
+		}
+		return true
+	}
+
 	if strings.ToLower(message.Body) == "factoid" {
 		if fact := p.randomFact(); fact != nil {
 			p.sayFact(message, *fact)
 			return true
-		} else {
-			log.Println("Got a nil fact.")
 		}
+		log.Println("Got a nil fact.")
 	}
 
 	if strings.ToLower(message.Body) == "forget that" {
@@ -692,3 +764,5 @@ func (p *Factoid) serveQuery(w http.ResponseWriter, r *http.Request) {
 		log.Println(err)
 	}
 }
+
+func (p *Factoid) ReplyMessage(message msg.Message, identifier string) bool { return false }

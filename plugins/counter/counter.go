@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -37,8 +39,8 @@ func GetItems(db *sqlx.DB, nick string) ([]Item, error) {
 		return nil, err
 	}
 	// Don't forget to embed the DB into all of that shiz
-	for _, i := range items {
-		i.DB = db
+	for i := range items {
+		items[i].DB = db
 	}
 	return items, nil
 }
@@ -134,7 +136,32 @@ func (p *CounterPlugin) Message(message msg.Message) bool {
 		return false
 	}
 
-	if message.Command && parts[0] == "inspect" && len(parts) == 2 {
+	if tea, _ := regexp.MatchString("(?i)^tea\\. [^.]*\\. ((hot)|(iced))\\.?$", message.Body); tea {
+		item, err := GetItem(p.DB, nick, ":tea:")
+		if err != nil {
+			log.Printf("Error finding item %s.%s: %s.", nick, ":tea:", err)
+			// Item ain't there, I guess
+			return false
+		}
+		log.Printf("About to update item: %#v", item)
+		item.UpdateDelta(1)
+		p.Bot.SendMessage(channel, fmt.Sprintf("bleep-bloop-blop... %s has %d :tea:",
+			nick, item.Count))
+		return true
+	} else if message.Command && message.Body == "reset me" {
+		items, err := GetItems(p.DB, strings.ToLower(nick))
+		if err != nil {
+			log.Printf("Error getting items to reset %s: %s", nick, err)
+			p.Bot.SendMessage(channel, "Something is technically wrong with your counters.")
+			return true
+		}
+		log.Printf("Items: %+v", items)
+		for _, item := range items {
+			item.Delete()
+		}
+		p.Bot.SendMessage(channel, fmt.Sprintf("%s, you are as new, my son.", nick))
+		return true
+	} else if message.Command && parts[0] == "inspect" && len(parts) == 2 {
 		var subject string
 
 		if parts[1] == "me" {
@@ -267,6 +294,49 @@ func (p *CounterPlugin) Message(message msg.Message) bool {
 				item.Count, item.Item))
 			return true
 		}
+	} else if len(parts) == 3 {
+		// Need to have at least 3 characters to ++ or --
+		if len(parts[0]) < 3 {
+			return false
+		}
+
+		subject := strings.ToLower(nick)
+		itemName := strings.ToLower(parts[0])
+
+		if nameParts := strings.SplitN(itemName, ".", 2); len(nameParts) == 2 {
+			subject = nameParts[0]
+			itemName = nameParts[1]
+		}
+
+		if parts[1] == "+=" {
+			// += those fuckers
+			item, err := GetItem(p.DB, subject, itemName)
+			if err != nil {
+				log.Printf("Error finding item %s.%s: %s.", subject, itemName, err)
+				// Item ain't there, I guess
+				return false
+			}
+			n, _ := strconv.Atoi(parts[2])
+			log.Printf("About to update item by %d: %#v", n, item)
+			item.UpdateDelta(n)
+			p.Bot.SendMessage(channel, fmt.Sprintf("%s has %d %s.", subject,
+				item.Count, item.Item))
+			return true
+		} else if parts[1] == "-=" {
+			// -= those fuckers
+			item, err := GetItem(p.DB, subject, itemName)
+			if err != nil {
+				log.Printf("Error finding item %s.%s: %s.", subject, itemName, err)
+				// Item ain't there, I guess
+				return false
+			}
+			n, _ := strconv.Atoi(parts[2])
+			log.Printf("About to update item by -%d: %#v", n, item)
+			item.UpdateDelta(-n)
+			p.Bot.SendMessage(channel, fmt.Sprintf("%s has %d %s.", subject,
+				item.Count, item.Item))
+			return true
+		}
 	}
 
 	return false
@@ -294,3 +364,5 @@ func (p *CounterPlugin) BotMessage(message msg.Message) bool {
 func (p *CounterPlugin) RegisterWeb() *string {
 	return nil
 }
+
+func (p *CounterPlugin) ReplyMessage(message msg.Message, identifier string) bool { return false }

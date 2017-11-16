@@ -26,6 +26,70 @@ func makeMessage(payload string) msg.Message {
 	}
 }
 
+func TestTeaEarlGreyHot(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("Tea. Earl Grey. Hot."))
+	c.Message(makeMessage("Tea. Earl Grey. Hot."))
+	item, err := GetItem(mb.DB(), "tester", ":tea:")
+	assert.Nil(t, err)
+	assert.Equal(t, 2, item.Count)
+}
+
+func TestTeaGreenHot(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("Tea. Green. Hot."))
+	c.Message(makeMessage("Tea. Green. Hot"))
+	c.Message(makeMessage("Tea. Green. Iced."))
+	item, err := GetItem(mb.DB(), "tester", ":tea:")
+	assert.Nil(t, err)
+	assert.Equal(t, 3, item.Count)
+}
+
+func TestTeaUnrelated(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("Tea."))
+	c.Message(makeMessage("Tea. It's great."))
+	item, err := GetItem(mb.DB(), "tester", ":tea:")
+	assert.Nil(t, err)
+	assert.Equal(t, 0, item.Count)
+}
+
+func TestTeaSkieselQuote(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("blah, this is a whole page of explanation where \"we did local search and used a tabu list\" would have sufficed"))
+	item, err := GetItem(mb.DB(), "tester", ":tea:")
+	assert.Nil(t, err)
+	assert.Equal(t, 0, item.Count)
+}
+func TestTeaUnicodeJapanese(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("Tea. おちや. Hot."))
+	item, err := GetItem(mb.DB(), "tester", ":tea:")
+	assert.Nil(t, err)
+	assert.Equal(t, 1, item.Count)
+}
+
+func TestResetMe(t *testing.T) {
+	mb := bot.NewMockBot()
+	c := New(mb)
+	assert.NotNil(t, c)
+	c.Message(makeMessage("test++"))
+	c.Message(makeMessage("!reset me"))
+	items, err := GetItems(mb.DB(), "tester")
+	assert.Nil(t, err)
+	assert.Len(t, items, 0)
+}
+
 func TestCounterOne(t *testing.T) {
 	mb := bot.NewMockBot()
 	c := New(mb)
